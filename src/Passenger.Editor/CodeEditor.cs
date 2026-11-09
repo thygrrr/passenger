@@ -17,8 +17,9 @@ namespace Passenger.Editor;
 public sealed partial class CodeEditor : Control
 {
     /// <summary>The code font Passenger carries, JetBrains Mono: the editor's, the terminal's and code's wherever the
-    /// window shows it, unless Settings puts another in force (<see cref="CodeFonts"/>).</summary>
-    public static readonly FontFamily CodeFont = new("avares://Passenger.Editor/Fonts#JetBrains Mono");
+    /// window shows it, unless Settings puts another in force (<see cref="CodeFonts"/>); named through
+    /// <see cref="FallbackFonts"/>, so what it lacks is drawn in the platform's own fallback.</summary>
+    public static readonly FontFamily CodeFont = FallbackFonts.Carry(new FontFamily("avares://Passenger.Editor/Fonts#JetBrains Mono"));
 
     public static readonly StyledProperty<double> FontSizeProperty =
         AvaloniaProperty.Register<CodeEditor, double>(nameof(FontSize), 13);
@@ -86,12 +87,14 @@ public sealed partial class CodeEditor : Control
         LogicalChildren.Add(counts);
         vertical.PropertyChanged += OnScrollBarChanged;
         horizontal.PropertyChanged += OnScrollBarChanged;
-        blink = new DispatcherTimer(TimeSpan.FromMilliseconds(530), DispatcherPriority.Background, (_, _) =>
+        // Started only while focused: a timer running holds the editor, and all it shows, from the dispatcher.
+        blink = new DispatcherTimer(DispatcherPriority.Background) { Interval = TimeSpan.FromMilliseconds(530) };
+        blink.Tick += (_, _) =>
         {
             caretOn = !caretOn;
             Blinks++;
             RedrawOverlay();
-        });
+        };
         decorations = new DocumentDecorations(document);
         ownsDecorations = true;
         decorations.Changed += OnDecorationsChanged;
@@ -688,6 +691,16 @@ public sealed partial class CodeEditor : Control
     {
         base.OnAttachedToVisualTree(e);
         RefreshStyle();
+        RestartBlink();
+    }
+
+    /// <summary>Gone from the screen (its popup, dialog or window closed), it stops its timers, which would hold it from the
+    /// dispatcher for as long as they ran.</summary>
+    protected override void OnDetachedFromVisualTree(VisualTreeAttachmentEventArgs e)
+    {
+        base.OnDetachedFromVisualTree(e);
+        blink.Stop();
+        hover?.Stop();
     }
 
     protected override void OnGotFocus(FocusChangedEventArgs e)

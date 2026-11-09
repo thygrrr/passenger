@@ -471,8 +471,9 @@ public static class OpenWindows
 {
     private static readonly List<Window> Open = [];
 
-    /// <summary>The IDE's windows closed since the test began, what each started perhaps still ending.</summary>
-    private static readonly List<Passenger.App.MainWindow> Closed = [];
+    /// <summary>What the IDE's windows closed since the test began started, perhaps still ending: their ends, never the
+    /// windows, so a test may see a window it closed let go.</summary>
+    private static readonly List<Task> Ending = [];
     private static bool watching;
 
     /// <summary>The longest the work of windows closed after a test may take to land, past the end their own limit gives
@@ -490,12 +491,29 @@ public static class OpenWindows
                 Open.Remove(window);
                 if (window is Passenger.App.MainWindow closed)
                 {
-                    Closed.Add(closed);
+                    KeepEnd(closed);
                 }
             });
         }
         Open.Clear();
-        Closed.Clear();
+        Ending.Clear();
+    }
+
+    /// <summary>Keeps what a closed window started ending, which its own Closed sets, if it has not yet.</summary>
+    private static void KeepEnd(Passenger.App.MainWindow closed)
+    {
+        if (closed.Ended is { } ended)
+        {
+            Ending.Add(ended);
+            return;
+        }
+        closed.Closed += (_, _) =>
+        {
+            if (closed.Ended is { } now)
+            {
+                Ending.Add(now);
+            }
+        };
     }
 
     /// <summary>Closes every window still open, the last opened first, waits for what each started to end, and what each
@@ -509,7 +527,7 @@ public static class OpenWindows
         {
             throw new InvalidOperationException("Windows left open can only be closed on their own thread");
         }
-        List<Task> ending = [.. Closed.Select(window => window.Ended).OfType<Task>().Where(ended => !ended.IsCompleted)];
+        List<Task> ending = [.. Ending.Where(ended => !ended.IsCompleted)];
         while (Open.Count > 0)
         {
             Window last = Open[^1];
@@ -523,7 +541,7 @@ public static class OpenWindows
                 }
             }
         }
-        Closed.Clear();
+        Ending.Clear();
         if (ending.Count == 0 && BackgroundWork.Pending == 0)
         {
             return true;
@@ -932,6 +950,17 @@ public static class Ui
             throw new TimeoutException($"The IDE was not quiet within {limit.TotalSeconds} s. Still busy:\n{Busy()}{ServerConversations()}{IdeLogTail()}{ServerLogTail()}");
         }
     }
+
+    /// <summary>Waits until nothing holds what <paramref name="weak"/> names, collecting fully at each of the window's
+    /// frames, so work its close left on the window's loop ends first; fails saying what then stays alive and why it
+    /// matters. Takes no strong reference itself: the caller makes the object in a method of its own, not inlined.</summary>
+    public static void Collected<T>(WeakReference<T> weak, string what) where T : class => WaitFor(() =>
+    {
+        GC.Collect();
+        GC.WaitForPendingFinalizers();
+        GC.Collect();
+        return !weak.TryGetTarget(out _);
+    }, what);
 
     /// <summary>What a blink of the caret allocates on the UI thread with the IDE at rest, the least of three: its frame of
     /// the editor, about 25 KB, which a wait draws whatever the IDE did whenever it outlasts the blink's 530 ms, so a measure

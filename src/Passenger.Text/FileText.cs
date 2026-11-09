@@ -215,10 +215,39 @@ public sealed record FileText(string Text, Encoding Encoding, bool HasBom, bool 
 
     private static byte[] FromDisk(string path)
     {
-        using FileStream stream = new(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
-        using MemoryStream bytes = new();
-        stream.CopyTo(bytes);
-        return bytes.ToArray();
+        using FileStream stream = new(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete, bufferSize: 0);
+        return ReadRest(stream, []);
+    }
+
+    /// <summary>A file's bytes: <paramref name="begun"/>, what was read of <paramref name="stream"/> first, and the rest, in
+    /// one array of the length the stream has, read on to its end where it has grown since (another program writing it),
+    /// short where it has shrunk; a stream of no length (a pipe) read as it comes.</summary>
+    public static byte[] ReadRest(Stream stream, ReadOnlySpan<byte> begun)
+    {
+        if (!stream.CanSeek || stream.Length > Array.MaxLength)
+        {
+            using MemoryStream all = new();
+            all.Write(begun);
+            stream.CopyTo(all);
+            return all.ToArray();
+        }
+        byte[] bytes = new byte[Math.Max(stream.Length, begun.Length)];
+        begun.CopyTo(bytes);
+        int read = begun.Length + stream.ReadAtLeast(bytes.AsSpan(begun.Length), bytes.Length - begun.Length, throwOnEndOfStream: false);
+        if (read < bytes.Length)
+        {
+            return bytes[..read];
+        }
+        int more = stream.ReadByte();
+        if (more < 0)
+        {
+            return bytes;
+        }
+        using MemoryStream grown = new();
+        grown.Write(bytes);
+        grown.WriteByte((byte)more);
+        stream.CopyTo(grown);
+        return grown.ToArray();
     }
 
     /// <summary>A file about to be written by a save, so a folder watcher takes it for the change it is rather than a
