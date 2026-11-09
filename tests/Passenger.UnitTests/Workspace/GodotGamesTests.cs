@@ -73,10 +73,7 @@ public sealed class GodotGamesTests : IDisposable
             Evaluated = new Passenger.Host.EvaluatedProject
             {
                 Path = csharp,
-                Properties = new Dictionary<string, Passenger.Host.EvaluatedProperty>
-                {
-                    [Passenger.Host.CarriedProperties.GodotProjectDir] = new("../game", true), [Passenger.Host.CarriedProperties.UsingGodotNETSdk] = new("true", false),
-                },
+                Properties = new Dictionary<string, Passenger.Host.EvaluatedProperty> { [Passenger.Host.CarriedProperties.GodotProjectDir] = new("../game", true) },
             },
         };
 
@@ -88,16 +85,16 @@ public sealed class GodotGamesTests : IDisposable
             $"A game of GDScript alone stands as {scripts.Path}, named {scripts.Name}, its Godot folder {scripts.GodotFolder}");
     }
 
-    /// <summary>A project evaluated with these: GodotProjectDir as it stands after its body, the generators' folder as the
-    /// SDK's props wrote it from what stood before the body, and where its build lands.</summary>
-    private ProjectModel Evaluated(string written, string? generators, string? target, bool godotSdk = true)
+    /// <summary>A project Godot.NET.Sdk builds, evaluated with these: GodotProjectDir as it stands after its body, the
+    /// generators' folder as the SDK's props wrote it from what stood before the body, and where its build lands.</summary>
+    private ProjectModel Evaluated(string written, string? generators, string? target)
     {
         string csharp = Write("Game.csproj", "<Project />\n");
-        Dictionary<string, Passenger.Host.EvaluatedProperty> properties = new() { [Passenger.Host.CarriedProperties.GodotProjectDir] = new(written, true) };
-        if (godotSdk)
+        Dictionary<string, Passenger.Host.EvaluatedProperty> properties = new()
         {
-            properties[Passenger.Host.CarriedProperties.UsingGodotNETSdk] = new("true", false);
-        }
+            [Passenger.Host.CarriedProperties.GodotProjectDir] = new(written, true),
+            [Passenger.Host.CarriedProperties.UsingGodotNETSdk] = new("true", false),
+        };
         if (generators is not null)
         {
             properties[Passenger.Host.CarriedProperties.GodotProjectDirBase64] = new(Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(generators)), false);
@@ -163,14 +160,34 @@ public sealed class GodotGamesTests : IDisposable
         Assert.Null(ProjectModel.Unevaluated(Write("App.csproj", "<Project />\n")).GodotLayoutProblem);
     }
 
-    /// <summary>A Microsoft.NET.Sdk program naming a game's folder in GodotProjectDir and hosting the game itself
-    /// (#1414): Run runs it as any .NET program, never on Godot.</summary>
+    /// <summary>A plain .NET project naming its game's Godot folder, as a host running the game on Godot as a library of its
+    /// own does (GodotProjectDir "..", Microsoft.NET.Sdk), is no game Godot runs: it has no Godot folder, project or layout to
+    /// mend, while the game's scenes and C# still know it, and the folder is no game of GDScript alone.</summary>
     [Fact]
-    public void A_project_of_another_sdk_setting_godot_project_dir_builds_for_no_godot_folder()
+    public void A_plain_dotnet_project_naming_a_godot_folder_is_no_game_godot_runs_but_still_of_that_game()
     {
-        Directory.CreateDirectory(Path.Combine(root, "game"));
-        ProjectModel host = Evaluated($"{root}/game/", null, null, godotSdk: false);
+        string game = Path.Combine(root, "game");
+        Write(Path.Combine("game", "project.godot"), Named);
+        WorkspaceModel read = WorkspaceModel.Read(root);
+        string csharp = Write(Path.Combine("game", "Game.2dog", "Game.2dog.csproj"), "<Project Sdk=\"Microsoft.NET.Sdk\" />\n");
+        ProjectModel host = ProjectModel.Unevaluated(csharp) with
+        {
+            Evaluated = new Passenger.Host.EvaluatedProject
+            {
+                Path = csharp,
+                Properties = new Dictionary<string, Passenger.Host.EvaluatedProperty>
+                {
+                    [Passenger.Host.CarriedProperties.GodotProjectDir] = new("..", true),
+                    [Passenger.Host.CarriedProperties.TargetPath] = new(Path.Combine(game, "Game.2dog", "bin", "Debug", "Game.2dog.dll"), false),
+                },
+            },
+        };
 
-        Assert.True(host is { GodotFolder: null, GodotLayoutProblem: null }, $"A .NET program hosting a game would run on Godot, as a Godot project in {host.GodotFolder}");
+        Assert.True(host is { GodotFolder: null, GodotLayoutProblem: null } && host.Godot() is null,
+            $"A Microsoft.NET.Sdk project naming {game} was taken for a game Godot runs ({host.GodotFolder}), so Run would start Godot in its place and not the program it builds");
+        Assert.Equal(game, host.NamedGodotFolder);
+        Assert.Empty(read.ScriptGames([host]));
+        Assert.Equal([csharp], WorkspaceModel.BuildingGodot([host], game));
+        Assert.Equal(game, Evaluated($"{game}/", $"{game}/", $"{game}/.godot/mono/temp/bin/Debug/Game.dll").GodotFolder);
     }
 }
